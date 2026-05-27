@@ -339,6 +339,23 @@ export const refreshAllDaily = action(
   })
 );
 
+export const refreshAllMonthly = action(
+  actionHandler({
+    args: S.Struct({}),
+    returns: S.Null,
+    handler: (): E.Effect<null, HttpClientError | S.SchemaError, ActionCtxDeps> =>
+      E.gen(function* () {
+        const { scheduler } = yield* ActionCtx;
+        const { fetchShowRevisions } = yield* TvMaze;
+        const revisions = yield* fetchShowRevisions("month");
+        const batches = Arr.chunksOf(revisions, 100); // TODO: tune
+        for (const [index, batch] of batches.entries())
+          yield* scheduler.runAfter(index * 10_000, api.shows.refreshMissingOrStale, { revisions: [...batch] });
+        return null;
+      }).pipe(E.provide(TvMaze.layer)),
+  })
+);
+
 // TYPES -----------------------------------------------------------------------------------------------------------------------------------
 type AggregateShowsParams<Namespace, Key> = {
   DataModel: DataModel;
