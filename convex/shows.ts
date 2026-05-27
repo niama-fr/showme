@@ -1,7 +1,7 @@
 import { TableAggregate } from "@convex-dev/aggregate";
 import { Migrations } from "@convex-dev/migrations";
 import { getYear } from "date-fns";
-import { Array as Arr, Effect as E, HashMap as H, Option as O, Schema as S, Struct } from "effect";
+import { Array as Arr, Cause, Effect as E, HashMap as H, Option as O, Schema as S, Schedule, Struct } from "effect";
 import type { HttpClientError } from "effect/unstable/http/HttpClientError";
 import { getDistinctChannelsFromShows, getOrCreateChannels } from "@/functions/channels";
 import { getDistinctCountriesFromShows, getOrCreateCountries } from "@/functions/countries";
@@ -25,6 +25,17 @@ import { Scheduler } from "./effex/services/Scheduler";
 import { optionMapEffect, sPaginated, sPaginationWith } from "./effex/utils";
 import { mutation, triggers } from "./triggers";
 
+const SHOW_REFRESH_BATCH_SIZE = 60;
+const SHOW_REFRESH_BATCH_DELAY_MS = 10_000;
+const UPSERT_RETRY_ATTEMPTS = 5;
+
+const retryMutationDefects = <A, Err, Req>(effect: E.Effect<A, Err, Req>): E.Effect<A, Err, Req> =>
+  effect.pipe(
+    E.sandbox,
+    E.retry({ schedule: Schedule.spaced("2 seconds"), times: UPSERT_RETRY_ATTEMPTS, while: Cause.hasDies }),
+    E.catch((cause) => E.failCause(cause))
+  );
+
 // AGGREGATES ------------------------------------------------------------------------------------------------------------------------------
 export const favoriteShows = new TableAggregate<AggregateShowsParams<boolean, string>>(components.favoriteShows, {
   namespace: ({ preference }) => {
@@ -36,7 +47,7 @@ triggers.register("shows", favoriteShows.trigger());
 
 export const topRatedShows = new TableAggregate<AggregateShowsParams<boolean, number>>(components.topRatedShows, {
   namespace: ({ premiered, rating }) => {
-    if (rating > 0 && !!premiered) return true;
+    if (rating > 0 && premiered) return true;
   },
   sortKey: ({ rating }) => -rating,
 });
@@ -44,7 +55,7 @@ triggers.register("shows", topRatedShows.trigger());
 
 export const topRatedShowsByYear = new TableAggregate<AggregateShowsParams<number, number>>(components.topRatedShowsByYear, {
   namespace: ({ premiered, rating }) => {
-    if (rating > 0 && !!premiered) return getYear(premiered);
+    if (rating > 0 && premiered) return getYear(premiered);
   },
   sortKey: ({ rating }) => -rating,
 });
@@ -54,7 +65,7 @@ export const topRatedShowsByPreference = new TableAggregate<AggregateShowsParams
   components.topRatedShowsByPreference,
   {
     namespace: ({ preference, premiered, rating }) => {
-      if (rating > 0 && !!premiered && preference) return preference;
+      if (rating > 0 && premiered && preference) return preference;
     },
     sortKey: ({ rating, name }) => [-rating, name],
   }
@@ -65,7 +76,7 @@ export const topRatedShowsByPreferenceAndYear = new TableAggregate<AggregateShow
   components.topRatedShowsByPreferenceAndYear,
   {
     namespace: ({ preference, premiered, rating }) => {
-      if (rating > 0 && !!premiered && preference) return `${preference}-${getYear(premiered)}`;
+      if (rating > 0 && premiered && preference) return `${preference}-${getYear(premiered)}`;
     },
     sortKey: ({ rating, name }) => [-rating, name],
   }
@@ -74,7 +85,7 @@ triggers.register("shows", topRatedShowsByPreferenceAndYear.trigger());
 
 export const trendingShows = new TableAggregate<AggregateShowsParams<boolean, [number, number]>>(components.trendingShows, {
   namespace: ({ premiered, rating }) => {
-    if (rating > 0 && !!premiered) return true;
+    if (rating > 0 && premiered) return true;
   },
   sortKey: ({ rating, weight }) => [-weight, -rating],
 });
@@ -82,7 +93,7 @@ triggers.register("shows", trendingShows.trigger());
 
 export const trendingShowsByYear = new TableAggregate<AggregateShowsParams<number, [number, number]>>(components.trendingShowsByYear, {
   namespace: ({ premiered, rating }) => {
-    if (rating > 0 && !!premiered) return getYear(premiered);
+    if (rating > 0 && premiered) return getYear(premiered);
   },
   sortKey: ({ rating, weight }) => [-weight, -rating],
 });
@@ -92,7 +103,7 @@ export const trendingShowsByPreference = new TableAggregate<AggregateShowsParams
   components.trendingShowsByPreference,
   {
     namespace: ({ preference, premiered, rating }) => {
-      if (rating > 0 && !!premiered && preference) return preference;
+      if (rating > 0 && premiered && preference) return preference;
     },
     sortKey: ({ rating, weight, name }) => [-weight, -rating, name],
   }
@@ -103,7 +114,7 @@ export const trendingShowsByPreferenceAndYear = new TableAggregate<AggregateShow
   components.trendingShowsByPreferenceAndYear,
   {
     namespace: ({ preference, premiered, rating }) => {
-      if (rating > 0 && !!premiered && preference) return `${preference}-${getYear(premiered)}`;
+      if (rating > 0 && premiered && preference) return `${preference}-${getYear(premiered)}`;
     },
     sortKey: ({ rating, weight, name }) => [-weight, -rating, name],
   }
@@ -315,7 +326,7 @@ export const refreshMissingOrStale = action(
         const { fetchShow, fetchShowWithEpisodes } = yield* TvMaze;
         for (const { apiId, includeEpisodes } of shows) {
           const dto = includeEpisodes ? yield* fetchShowWithEpisodes(apiId) : yield* fetchShow(apiId);
-          yield* runMutation(api.shows.upsert, { dto });
+          yield* retryMutationDefects(runMutation(api.shows.upsert, { dto }));
         }
         return null;
       }).pipe(E.provide(TvMaze.layer)),
@@ -331,9 +342,9 @@ export const refreshAllDaily = action(
         const { scheduler } = yield* ActionCtx;
         const { fetchShowRevisions } = yield* TvMaze;
         const revisions = yield* fetchShowRevisions("day");
-        const batches = Arr.chunksOf(revisions, 100); // TODO: tune
+        const batches = Arr.chunksOf(revisions, SHOW_REFRESH_BATCH_SIZE);
         for (const [index, batch] of batches.entries())
-          yield* scheduler.runAfter(index * 10_000, api.shows.refreshMissingOrStale, { revisions: [...batch] });
+          yield* scheduler.runAfter(index * SHOW_REFRESH_BATCH_DELAY_MS, api.shows.refreshMissingOrStale, { revisions: [...batch] });
         return null;
       }).pipe(E.provide(TvMaze.layer)),
   })
@@ -348,9 +359,9 @@ export const refreshAllMonthly = action(
         const { scheduler } = yield* ActionCtx;
         const { fetchShowRevisions } = yield* TvMaze;
         const revisions = yield* fetchShowRevisions("month");
-        const batches = Arr.chunksOf(revisions, 100); // TODO: tune
+        const batches = Arr.chunksOf(revisions, SHOW_REFRESH_BATCH_SIZE);
         for (const [index, batch] of batches.entries())
-          yield* scheduler.runAfter(index * 10_000, api.shows.refreshMissingOrStale, { revisions: [...batch] });
+          yield* scheduler.runAfter(index * SHOW_REFRESH_BATCH_DELAY_MS, api.shows.refreshMissingOrStale, { revisions: [...batch] });
         return null;
       }).pipe(E.provide(TvMaze.layer)),
   })

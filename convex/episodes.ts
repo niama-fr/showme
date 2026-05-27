@@ -10,7 +10,7 @@ import { sShow } from "@/schemas/shows";
 import { TvMaze } from "@/services/tvmaze";
 import { api, components, internal } from "./_generated/api";
 import type { DataModel, Id } from "./_generated/dataModel";
-import { action, query } from "./_generated/server";
+import { action, internalMutation, query } from "./_generated/server";
 import { actionHandler, mutationHandler, queryHandler } from "./effex";
 import { sId } from "./effex/schemas/genericId";
 import { ActionCtx, type ActionCtxDeps } from "./effex/services/ActionCtx";
@@ -21,6 +21,14 @@ import { mutation, triggers } from "./triggers";
 
 // CONSTANTS -------------------------------------------------------------------------------------------------------------------------------
 const WATCH_BATCH_SIZE = 100;
+const EPISODE_AGGREGATE_NAMESPACES = [
+  ["favorite", false],
+  ["favorite", true],
+  ["ignored", false],
+  ["ignored", true],
+  ["unset", false],
+  ["unset", true],
+] as const satisfies readonly AggregateEpisodesParams["Namespace"][];
 
 // AGGREGATES ------------------------------------------------------------------------------------------------------------------------------
 export const unwatchedEpisodes = new TableAggregate<AggregateEpisodesParams>(components.unwatchedEpisodes, {
@@ -145,6 +153,16 @@ export const setShowAiredWatched = mutation(
     }),
   })
 );
+
+export const clearAggregates = internalMutation({
+  handler: async (ctx) => {
+    for (const namespace of EPISODE_AGGREGATE_NAMESPACES) {
+      await unwatchedEpisodes.clear(ctx, { namespace });
+      await upcomingEpisodes.clear(ctx, { namespace });
+    }
+    return null;
+  },
+});
 
 // ACTIONS ---------------------------------------------------------------------------------------------------------------------------------
 export const fetchForShow = action(
