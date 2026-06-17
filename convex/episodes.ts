@@ -35,13 +35,13 @@ export const unwatchedEpisodes = new TableAggregate<AggregateEpisodesParams>(com
   namespace: ({ isWatched, preference }) => [preference, isWatched],
   sortKey: ({ airstamp, number, season, showId }) => [-parseISO(airstamp).getTime(), `${showId}`, -season, -(number ?? 0)],
 });
-triggers.register("episodes", unwatchedEpisodes.trigger());
+triggers.register("episodes", unwatchedEpisodes.idempotentTrigger());
 
 export const upcomingEpisodes = new TableAggregate<AggregateEpisodesParams>(components.upcomingEpisodes, {
   namespace: ({ isWatched, preference }) => [preference, isWatched],
   sortKey: ({ airstamp, number, season, showId }) => [parseISO(airstamp).getTime(), `${showId}`, season, number ?? 0],
 });
-triggers.register("episodes", upcomingEpisodes.trigger());
+triggers.register("episodes", upcomingEpisodes.idempotentTrigger());
 
 // QUERIES ---------------------------------------------------------------------------------------------------------------------------------
 export const hasByShow = query(
