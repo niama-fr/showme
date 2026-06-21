@@ -1,23 +1,23 @@
-import { TableAggregate } from "@convex-dev/aggregate";
 import { Migrations } from "@convex-dev/migrations";
-import { formatISO, parseISO } from "date-fns";
+import { formatISO } from "date-fns";
 import { Effect as E, Option as O, Schema as S, Struct } from "effect";
 import type { HttpClientError } from "effect/unstable/http/HttpClientError";
 import { episodeFromDoc, hasEpisodesByShow, readEpisodeByApiId, readEpisodesByShow, readPaginatedEpisodes } from "@/functions/episodes";
 import { sEpisodeCreate } from "@/schemas/creates";
-import { type Episodes, sEpisode } from "@/schemas/episodes";
+import { sEpisode } from "@/schemas/episodes";
 import { sShow } from "@/schemas/shows";
 import { TvMaze } from "@/services/tvmaze";
 import { api, components, internal } from "./_generated/api";
 import type { DataModel, Id } from "./_generated/dataModel";
-import { action, internalMutation, query } from "./_generated/server";
+import { action, query } from "./_generated/server";
+import { unwatchedEpisodes, upcomingEpisodes } from "./aggregates/episodes";
 import { actionHandler, mutationHandler, queryHandler } from "./effex";
 import { sId } from "./effex/schemas/genericId";
 import { ActionCtx, type ActionCtxDeps } from "./effex/services/ActionCtx";
 import { DatabaseWriter } from "./effex/services/DatabaseWriter";
 import { MutationCtx, type MutationCtxDeps } from "./effex/services/MutationCtx";
 import { sPaginated, sPaginationWith } from "./effex/utils";
-import { mutation, triggers } from "./triggers";
+import { internalMutation, mutation } from "./triggers";
 
 // CONSTANTS -------------------------------------------------------------------------------------------------------------------------------
 const WATCH_BATCH_SIZE = 100;
@@ -29,19 +29,6 @@ const EPISODE_AGGREGATE_NAMESPACES = [
   ["unset", false],
   ["unset", true],
 ] as const satisfies readonly AggregateEpisodesParams["Namespace"][];
-
-// AGGREGATES ------------------------------------------------------------------------------------------------------------------------------
-export const unwatchedEpisodes = new TableAggregate<AggregateEpisodesParams>(components.unwatchedEpisodes, {
-  namespace: ({ isWatched, preference }) => [preference, isWatched],
-  sortKey: ({ airstamp, number, season, showId }) => [-parseISO(airstamp).getTime(), `${showId}`, -season, -(number ?? 0)],
-});
-triggers.register("episodes", unwatchedEpisodes.idempotentTrigger());
-
-export const upcomingEpisodes = new TableAggregate<AggregateEpisodesParams>(components.upcomingEpisodes, {
-  namespace: ({ isWatched, preference }) => [preference, isWatched],
-  sortKey: ({ airstamp, number, season, showId }) => [parseISO(airstamp).getTime(), `${showId}`, season, number ?? 0],
-});
-triggers.register("episodes", upcomingEpisodes.idempotentTrigger());
 
 // QUERIES ---------------------------------------------------------------------------------------------------------------------------------
 export const hasByShow = query(
@@ -180,14 +167,6 @@ export const fetchForShow = action(
   })
 );
 
-// TYPES -----------------------------------------------------------------------------------------------------------------------------------
-type AggregateEpisodesParams = {
-  DataModel: DataModel;
-  Key: (number | string)[];
-  Namespace?: [Episodes["Entity"]["preference"], Episodes["Entity"]["isWatched"]];
-  TableName: "episodes";
-};
-
 // MIGRATIONS ------------------------------------------------------------------------------------------------------------------------------
 export const migrations = new Migrations<DataModel>(components.migrations);
 export const run = migrations.runner();
@@ -201,3 +180,13 @@ export const backfillAggregatesMigration = migrations.define({
 });
 
 export const runAggregateBackfill = migrations.runner(internal.episodes.backfillAggregatesMigration);
+
+export const repairAggregatesMigration = migrations.define({
+  table: "episodes",
+  migrateOne: async (ctx, doc) => {
+    await unwatchedEpisodes.insertIfDoesNotExist(ctx, doc);
+    await upcomingEpisodes.insertIfDoesNotExist(ctx, doc);
+  },
+});
+
+export const runAggregateRepair = migrations.runner(internal.episodes.repairAggregatesMigration);

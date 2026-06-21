@@ -1,6 +1,4 @@
-import { TableAggregate } from "@convex-dev/aggregate";
 import { Migrations } from "@convex-dev/migrations";
-import { getYear } from "date-fns";
 import { Array as Arr, Cause, Effect as E, HashMap as H, Option as O, Schema as S, Schedule, Struct } from "effect";
 import type { HttpClientError } from "effect/unstable/http/HttpClientError";
 import { getDistinctChannelsFromShows, getOrCreateChannels } from "@/functions/channels";
@@ -14,6 +12,17 @@ import { TvMaze } from "@/services/tvmaze";
 import { api, components, internal } from "./_generated/api";
 import type { DataModel } from "./_generated/dataModel";
 import { action, query } from "./_generated/server";
+import {
+  favoriteShows,
+  topRatedShows,
+  topRatedShowsByPreference,
+  topRatedShowsByPreferenceAndYear,
+  topRatedShowsByYear,
+  trendingShows,
+  trendingShowsByPreference,
+  trendingShowsByPreferenceAndYear,
+  trendingShowsByYear,
+} from "./aggregates/shows";
 import { actionHandler, mutationHandler, queryHandler } from "./effex";
 import type { DocNotFoundInTable } from "./effex/errors";
 import { FIELDS } from "./effex/fields";
@@ -23,7 +32,7 @@ import { DatabaseReader } from "./effex/services/DatabaseReader";
 import { MutationCtx, type MutationCtxDeps } from "./effex/services/MutationCtx";
 import { Scheduler } from "./effex/services/Scheduler";
 import { optionMapEffect, sPaginated, sPaginationWith } from "./effex/utils";
-import { mutation, triggers } from "./triggers";
+import { mutation } from "./triggers";
 
 const SHOW_REFRESH_BATCH_SIZE = 60;
 const SHOW_REFRESH_BATCH_DELAY_MS = 10_000;
@@ -35,91 +44,6 @@ const retryMutationDefects = <A, Err, Req>(effect: E.Effect<A, Err, Req>): E.Eff
     E.retry({ schedule: Schedule.spaced("2 seconds"), times: UPSERT_RETRY_ATTEMPTS, while: Cause.hasDies }),
     E.catch((cause) => E.failCause(cause))
   );
-
-// AGGREGATES ------------------------------------------------------------------------------------------------------------------------------
-export const favoriteShows = new TableAggregate<AggregateShowsParams<boolean, string>>(components.favoriteShows, {
-  namespace: ({ preference }) => {
-    if (preference === "favorite") return true;
-  },
-  sortKey: ({ name }) => name,
-});
-triggers.register("shows", favoriteShows.trigger());
-
-export const topRatedShows = new TableAggregate<AggregateShowsParams<boolean, number>>(components.topRatedShows, {
-  namespace: ({ premiered, rating }) => {
-    if (rating > 0 && premiered) return true;
-  },
-  sortKey: ({ rating }) => -rating,
-});
-triggers.register("shows", topRatedShows.trigger());
-
-export const topRatedShowsByYear = new TableAggregate<AggregateShowsParams<number, number>>(components.topRatedShowsByYear, {
-  namespace: ({ premiered, rating }) => {
-    if (rating > 0 && premiered) return getYear(premiered);
-  },
-  sortKey: ({ rating }) => -rating,
-});
-triggers.register("shows", topRatedShowsByYear.trigger());
-
-export const topRatedShowsByPreference = new TableAggregate<AggregateShowsParams<string, [number, string]>>(
-  components.topRatedShowsByPreference,
-  {
-    namespace: ({ preference, premiered, rating }) => {
-      if (rating > 0 && premiered && preference) return preference;
-    },
-    sortKey: ({ rating, name }) => [-rating, name],
-  }
-);
-triggers.register("shows", topRatedShowsByPreference.trigger());
-
-export const topRatedShowsByPreferenceAndYear = new TableAggregate<AggregateShowsParams<string, [number, string]>>(
-  components.topRatedShowsByPreferenceAndYear,
-  {
-    namespace: ({ preference, premiered, rating }) => {
-      if (rating > 0 && premiered && preference) return `${preference}-${getYear(premiered)}`;
-    },
-    sortKey: ({ rating, name }) => [-rating, name],
-  }
-);
-triggers.register("shows", topRatedShowsByPreferenceAndYear.trigger());
-
-export const trendingShows = new TableAggregate<AggregateShowsParams<boolean, [number, number]>>(components.trendingShows, {
-  namespace: ({ premiered, rating }) => {
-    if (rating > 0 && premiered) return true;
-  },
-  sortKey: ({ rating, weight }) => [-weight, -rating],
-});
-triggers.register("shows", trendingShows.trigger());
-
-export const trendingShowsByYear = new TableAggregate<AggregateShowsParams<number, [number, number]>>(components.trendingShowsByYear, {
-  namespace: ({ premiered, rating }) => {
-    if (rating > 0 && premiered) return getYear(premiered);
-  },
-  sortKey: ({ rating, weight }) => [-weight, -rating],
-});
-triggers.register("shows", trendingShowsByYear.trigger());
-
-export const trendingShowsByPreference = new TableAggregate<AggregateShowsParams<string, [number, number, string]>>(
-  components.trendingShowsByPreference,
-  {
-    namespace: ({ preference, premiered, rating }) => {
-      if (rating > 0 && premiered && preference) return preference;
-    },
-    sortKey: ({ rating, weight, name }) => [-weight, -rating, name],
-  }
-);
-triggers.register("shows", trendingShowsByPreference.trigger());
-
-export const trendingShowsByPreferenceAndYear = new TableAggregate<AggregateShowsParams<string, [number, number, string]>>(
-  components.trendingShowsByPreferenceAndYear,
-  {
-    namespace: ({ preference, premiered, rating }) => {
-      if (rating > 0 && premiered && preference) return `${preference}-${getYear(premiered)}`;
-    },
-    sortKey: ({ rating, weight, name }) => [-weight, -rating, name],
-  }
-);
-triggers.register("shows", trendingShowsByPreferenceAndYear.trigger());
 
 // QUERIES ---------------------------------------------------------------------------------------------------------------------------------
 export const readMissingOrStale = query(
@@ -366,14 +290,6 @@ export const refreshAllMonthly = action(
       }).pipe(E.provide(TvMaze.layer)),
   })
 );
-
-// TYPES -----------------------------------------------------------------------------------------------------------------------------------
-type AggregateShowsParams<Namespace, Key> = {
-  DataModel: DataModel;
-  Key: Key;
-  Namespace?: Namespace;
-  TableName: "shows";
-};
 
 // MIGRATIONS ------------------------------------------------------------------------------------------------------------------------------
 export const migrations = new Migrations<DataModel>(components.migrations);

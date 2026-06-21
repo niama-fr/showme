@@ -8,6 +8,8 @@
  * @module
  */
 
+import type * as aggregates_episodes from "../aggregates/episodes.js";
+import type * as aggregates_shows from "../aggregates/shows.js";
 import type * as crons from "../crons.js";
 import type * as effex_errors from "../effex/errors.js";
 import type * as effex_fields from "../effex/fields.js";
@@ -42,6 +44,8 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  "aggregates/episodes": typeof aggregates_episodes;
+  "aggregates/shows": typeof aggregates_shows;
   crons: typeof crons;
   "effex/errors": typeof effex_errors;
   "effex/fields": typeof effex_fields;

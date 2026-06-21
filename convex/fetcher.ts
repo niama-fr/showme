@@ -1,8 +1,9 @@
 import { Schema as S, Struct } from "effect";
 import { readFetcher, startFetcher, updateFetcher } from "@/functions/fetcher";
 import { sFetcherDoc, sFetcherFields } from "@/schemas/fetcher";
-import { mutation, query } from "./_generated/server";
+import { query } from "./_generated/server";
 import { mutationHandler, queryHandler } from "./effex";
+import { mutation } from "./triggers";
 
 // QUERY -----------------------------------------------------------------------------------------------------------------------------------
 export const read = query(
